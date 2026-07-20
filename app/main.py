@@ -1,5 +1,6 @@
 import json
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
@@ -10,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.db import get_pool
 from app.embeddings import embed_query
 from app.llm import stream_answer
 from app.rag import retrieve
@@ -22,7 +24,19 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Open and wait for the Neon pool here, during startup — which Render's
+    # health check blocks on — instead of lazily on the first /chat request,
+    # which otherwise races pool init + Neon's cold-start wake against a real
+    # visitor with no error handling around it.
+    get_pool().wait()
+    yield
+    get_pool().close()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
